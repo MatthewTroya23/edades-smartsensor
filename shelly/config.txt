@@ -1,0 +1,106 @@
+// Variable global para almacenar el estado antes de enviarlo
+let status = {
+  activeEndpoint: "",
+  mac: null,
+  uptime: null,
+  wifiRssi: null,
+  deviceIp: null,
+  emStatus: null
+};
+
+// Lock para evitar llamadas concurrentes
+let isFetchingData = false;
+
+// Función para verificar si todos los valores de status han sido asignados
+function isStatusComplete() {
+  for (let key in status) {
+    if (status[key] === null || status[key] === undefined) {
+      return false; // Falta algún dato
+    }
+  }
+  return true; // Todos los datos están listos
+}
+
+// Función para publicar en MQTT cuando todos los datos estén listos
+function publishStatusIfReady() {
+  if (isStatusComplete()) {
+    MQTT.publish("", JSON.stringify(status), 0, false);
+
+    // Resetear variables para la próxima ejecución
+    for (let key in status) {
+      if (key !== "activeEndpoint") {
+        status[key] = null;
+      }
+    }
+
+    // Liberar el lock
+    isFetchingData = false;
+  }
+}
+
+// Función para obtener estado de sistema
+function getSysStatus() {
+  Shelly.call("Sys.GetStatus", {}, function (sysResult, sysErrorCode, sysErrorMessage) {
+    if (sysErrorCode !== 0) {
+      print("Error obteniendo system status:", sysErrorMessage);
+      return;
+    }
+
+    // Actualizar variables globales
+    status.mac= sysResult.mac;
+    status.uptime= sysResult.uptime;
+
+    // Intentar publicar si ya tenemos todos los datos
+    publishStatusIfReady();
+  });
+}
+
+// Función para obtener estado de WiFi
+function getWiFiStatus() {
+  Shelly.call("WiFi.GetStatus", {}, function (wifiResult, wifiErrorCode, wifiErrorMessage) {
+    if (wifiErrorCode !== 0) {
+      print("Error obteniendo WiFi status:", wifiErrorMessage);
+      return;
+    }
+
+    // Actualizar variables globales
+    status.wifiRssi = wifiResult.rssi;
+    status.deviceIp= wifiResult.sta_ip;
+
+    // Intentar publicar si ya tenemos todos los datos
+    publishStatusIfReady();
+  });
+}
+
+// Función para obtener estado de EM1
+function getEM1Status() {
+  Shelly.call("EM1.GetStatus", {"id":0}, function (emResult, emErrorCode, emErrorMessage) {
+    if (emErrorCode !== 0) {
+      print("Error obteniendo EM1 status:", emErrorMessage);
+      return;
+    }
+
+    // Actualizar variables globales
+    status.emStatus = emResult;
+
+    // Intentar publicar si ya tenemos todos los datos
+    publishStatusIfReady();
+  });
+}
+
+// Función principal que ejecuta las consultas
+function updateStatus() {
+  if (isFetchingData) {
+    print("Omitiendo actualización: aún hay una en proceso.");
+    return;
+  }
+
+  isFetchingData = true; // Activamos el lock
+
+  getSysStatus();
+  getWiFiStatus();
+  getEM1Status();
+}
+
+// Ejecutar cada segundo
+let notifyTimer = Timer.set(1000, true, updateStatus);
